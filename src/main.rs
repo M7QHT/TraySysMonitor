@@ -29,15 +29,15 @@ use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORY
 use windows_sys::Win32::System::Threading::{CreateMutexW, GetSystemTimes};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow,
-    DispatchMessageW, FindWindowExW, FindWindowW, GetCursorPos, GetDesktopWindow,
-    GetForegroundWindow, GetMessageW, GetShellWindow, GetWindowRect, IDC_SIZEALL,
-    IsWindowVisible, LoadCursorW, MF_CHECKED, MF_POPUP, MF_SEPARATOR, MF_STRING, MF_UNCHECKED,
-    MSG, PostQuitMessage, RegisterClassW, SWP_NOACTIVATE, SWP_NOZORDER, SW_HIDE,
-    SW_SHOWNOACTIVATE,
-    SetForegroundWindow, SetTimer, SetWindowPos, ShowWindow, TPM_BOTTOMALIGN, TPM_LEFTALIGN,
-    TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage, WM_COMMAND, WM_DESTROY, WM_LBUTTONDOWN,
-    WM_LBUTTONUP, WM_MOUSEMOVE, WM_PAINT, WM_RBUTTONUP, WM_TIMER, WNDCLASSW, WS_EX_NOACTIVATE,
-    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    DispatchMessageW, FindWindowExW, FindWindowW, GW_HWNDPREV, GetCursorPos, GetDesktopWindow,
+    GetForegroundWindow, GetMessageW, GetShellWindow, GetWindow, GetWindowRect, HWND_TOPMOST,
+    IDC_SIZEALL, IsWindowVisible, LoadCursorW, MF_CHECKED, MF_POPUP, MF_SEPARATOR, MF_STRING,
+    MF_UNCHECKED, MSG, PostMessageW, PostQuitMessage, RegisterClassW, SWP_NOACTIVATE, SWP_NOMOVE,
+    SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOWNOACTIVATE, SetForegroundWindow, SetTimer,
+    SetWindowPos, ShowWindow, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RIGHTBUTTON, TrackPopupMenu,
+    TranslateMessage, WM_CAPTURECHANGED, WM_COMMAND, WM_DESTROY, WM_ERASEBKGND, WM_LBUTTONDOWN,
+    WM_LBUTTONUP, WM_MOUSEMOVE, WM_NULL, WM_PAINT, WM_RBUTTONUP, WM_TIMER, WNDCLASSW,
+    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
 const BAR_HEIGHT: i32 = 30;
@@ -634,12 +634,47 @@ fn sync_bars_and_layout(state: &mut AppState) {
                         SWP_NOZORDER | SWP_NOACTIVATE,
                     );
                 }
-                if IsWindowVisible(bar.hwnd) == 0 {
+                let was_hidden = IsWindowVisible(bar.hwnd) == 0;
+                if was_hidden {
                     ShowWindow(bar.hwnd, SW_SHOWNOACTIVATE);
+                }
+                if !is_popup_menu_open() && (was_hidden || is_taskbar_above(bar.hwnd, mon.taskbar_hwnd)) {
+                    SetWindowPos(
+                        bar.hwnd,
+                        HWND_TOPMOST,
+                        0,
+                        0,
+                        0,
+                        0,
+                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                    );
                 }
                 InvalidateRect(bar.hwnd, null(), 0);
             }
         }
+    }
+}
+
+fn is_popup_menu_open() -> bool {
+    unsafe {
+        let cls = to_wide("#32768");
+        let h = FindWindowW(cls.as_ptr(), null());
+        !h.is_null() && IsWindowVisible(h) != 0
+    }
+}
+
+fn is_taskbar_above(bar_hwnd: HWND, taskbar_hwnd: HWND) -> bool {
+    unsafe {
+        let mut cur = GetWindow(bar_hwnd, GW_HWNDPREV);
+        let mut steps = 0;
+        while !cur.is_null() && steps < 32 {
+            if cur == taskbar_hwnd {
+                return true;
+            }
+            cur = GetWindow(cur, GW_HWNDPREV);
+            steps += 1;
+        }
+        false
     }
 }
 
@@ -675,44 +710,46 @@ fn paint_bar(hwnd: HWND) {
         SetBkMode(hdc, TRANSPARENT as i32);
 
         APP.with(|cell| {
-            if let Some(state) = cell.borrow().as_ref() {
-                let mut x = 10;
-                if state.settings.show_cpu {
-                    draw_metric(
-                        hdc,
-                        state.label_font,
-                        state.value_font,
-                        x,
-                        "CPU",
-                        &format!("{}%", state.cpu_pct),
-                        level_color(state.cpu_pct),
-                    );
-                    x += METRIC_WIDTH;
-                }
-                if state.settings.show_ram {
-                    draw_metric(
-                        hdc,
-                        state.label_font,
-                        state.value_font,
-                        x,
-                        "RAM",
-                        &format!("{}%", state.ram_pct),
-                        level_color(state.ram_pct),
-                    );
-                    x += METRIC_WIDTH;
-                }
-                if state.settings.show_gpu {
-                    let txt = if state.gpu_pct >= 0 {
-                        format!("{}%", state.gpu_pct)
-                    } else {
-                        "N/A".to_string()
-                    };
-                    let col = if state.gpu_pct >= 0 {
-                        level_color(state.gpu_pct)
-                    } else {
-                        0x00909090
-                    };
-                    draw_metric(hdc, state.label_font, state.value_font, x, "GPU", &txt, col);
+            if let Ok(borrow) = cell.try_borrow() {
+                if let Some(state) = borrow.as_ref() {
+                    let mut x = 10;
+                    if state.settings.show_cpu {
+                        draw_metric(
+                            hdc,
+                            state.label_font,
+                            state.value_font,
+                            x,
+                            "CPU",
+                            &format!("{}%", state.cpu_pct),
+                            level_color(state.cpu_pct),
+                        );
+                        x += METRIC_WIDTH;
+                    }
+                    if state.settings.show_ram {
+                        draw_metric(
+                            hdc,
+                            state.label_font,
+                            state.value_font,
+                            x,
+                            "RAM",
+                            &format!("{}%", state.ram_pct),
+                            level_color(state.ram_pct),
+                        );
+                        x += METRIC_WIDTH;
+                    }
+                    if state.settings.show_gpu {
+                        let txt = if state.gpu_pct >= 0 {
+                            format!("{}%", state.gpu_pct)
+                        } else {
+                            "N/A".to_string()
+                        };
+                        let col = if state.gpu_pct >= 0 {
+                            level_color(state.gpu_pct)
+                        } else {
+                            0x00909090
+                        };
+                        draw_metric(hdc, state.label_font, state.value_font, x, "GPU", &txt, col);
+                    }
                 }
             }
         });
@@ -849,6 +886,7 @@ fn show_context_menu(hwnd: HWND) {
             hwnd,
             null(),
         );
+        PostMessageW(hwnd, WM_NULL, 0, 0);
         DestroyMenu(menu);
     }
 }
@@ -1043,6 +1081,21 @@ unsafe extern "system" fn wnd_proc(
         }
         WM_COMMAND => {
             handle_command(hwnd, wparam & 0xFFFF);
+            0
+        }
+        WM_ERASEBKGND => 1,
+        WM_CAPTURECHANGED => {
+            APP.with(|cell| {
+                if let Ok(mut borrow) = cell.try_borrow_mut() {
+                    if let Some(state) = borrow.as_mut() {
+                        if state.dragging {
+                            state.dragging = false;
+                            state.drag_hwnd = null_mut();
+                            state.settings.save();
+                        }
+                    }
+                }
+            });
             0
         }
         WM_DESTROY => 0,
