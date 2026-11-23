@@ -203,8 +203,7 @@ struct Settings {
     show_gpu: bool,
     all_monitors: bool,
     selected_monitors: Vec<usize>, // 0-based monitor indices when all_monitors == false
-    offset_from_right: i32,        // distance from right edge of taskbar (or clock)
-    auto_dock: bool,
+    monitor_positions: Vec<(usize, bool, i32)>, // (monitor_index, auto_dock, offset_from_right)
 }
 
 impl Default for Settings {
@@ -215,13 +214,29 @@ impl Default for Settings {
             show_gpu: true,
             all_monitors: false,
             selected_monitors: vec![0],
-            offset_from_right: 160,
-            auto_dock: true,
+            monitor_positions: Vec::new(),
         }
     }
 }
 
 impl Settings {
+    fn get_pos(&self, mon_idx: usize) -> (bool, i32) {
+        self.monitor_positions
+            .iter()
+            .find(|p| p.0 == mon_idx)
+            .map(|p| (p.1, p.2))
+            .unwrap_or((true, 160))
+    }
+
+    fn set_pos(&mut self, mon_idx: usize, auto_dock: bool, offset: i32) {
+        if let Some(p) = self.monitor_positions.iter_mut().find(|p| p.0 == mon_idx) {
+            p.1 = auto_dock;
+            p.2 = offset;
+        } else {
+            self.monitor_positions.push((mon_idx, auto_dock, offset));
+        }
+    }
+
     fn path() -> Option<PathBuf> {
         std::env::var_os("APPDATA").map(|p| PathBuf::from(p).join("TraySysMonitor").join("settings.ini"))
     }
@@ -240,10 +255,18 @@ impl Settings {
                     "ShowRam" => s.show_ram = v.eq_ignore_ascii_case("true"),
                     "ShowGpu" => s.show_gpu = v.eq_ignore_ascii_case("true"),
                     "AllMonitors" => s.all_monitors = v.eq_ignore_ascii_case("true"),
-                    "AutoDock" => s.auto_dock = v.eq_ignore_ascii_case("true"),
-                    "OffsetFromRight" => {
-                        if let Ok(n) = v.parse::<i32>() {
-                            s.offset_from_right = n;
+                    "MonitorPositions" => {
+                        for item in v.split(';') {
+                            let parts: Vec<&str> = item.split(':').collect();
+                            if parts.len() == 3 {
+                                if let (Ok(idx), Ok(ad), Ok(off)) = (
+                                    parts[0].trim().parse::<usize>(),
+                                    parts[1].trim().parse::<u8>(),
+                                    parts[2].trim().parse::<i32>(),
+                                ) {
+                                    s.set_pos(idx, ad != 0, off);
+                                }
+                            }
                         }
                     }
                     "SelectedMonitors" => {
@@ -274,14 +297,18 @@ impl Settings {
             let _ = fs::create_dir_all(parent);
         }
         let mons: Vec<String> = self.selected_monitors.iter().map(|i| i.to_string()).collect();
+        let pos_str: Vec<String> = self
+            .monitor_positions
+            .iter()
+            .map(|(idx, ad, off)| format!("{}:{}:{}", idx, if *ad { 1 } else { 0 }, off))
+            .collect();
         let content = format!(
-            "ShowCpu={}\r\nShowRam={}\r\nShowGpu={}\r\nAllMonitors={}\r\nAutoDock={}\r\nOffsetFromRight={}\r\nSelectedMonitors={}\r\n",
+            "ShowCpu={}\r\nShowRam={}\r\nShowGpu={}\r\nAllMonitors={}\r\nMonitorPositions={}\r\nSelectedMonitors={}\r\n",
             self.show_cpu,
             self.show_ram,
             self.show_gpu,
             self.all_monitors,
-            self.auto_dock,
-            self.offset_from_right,
+            pos_str.join(";"),
             mons.join(",")
         );
         let _ = fs::write(p, content);
@@ -569,10 +596,11 @@ fn sync_bars_and_layout(state: &mut AppState) {
                 continue;
             }
 
-            let offset = if state.settings.auto_dock {
+            let (auto_dock, saved_offset) = state.settings.get_pos(bar.monitor_index);
+            let offset = if auto_dock {
                 default_offset_for_taskbar(mon)
             } else {
-                state.settings.offset_from_right
+                saved_offset
             };
 
             let mut x = mon.tb_rect.right - w - offset;
@@ -820,7 +848,7 @@ fn show_context_menu(hwnd: HWND) {
     }
 }
 
-fn handle_command(cmd: usize) {
+fn handle_command(hwnd: HWND, cmd: usize) {
     if cmd == CMD_EXIT {
         unsafe {
             PostQuitMessage(0);
@@ -856,25 +884,44 @@ fn handle_command(cmd: usize) {
                 }
             }
             CMD_MOVE_LEFT => {
-                if state.settings.auto_dock {
-                    if let Some(m) = state.monitors.first() {
-                        state.settings.offset_from_right = default_offset_for_taskbar(m);
+                let mon_idx = state
+                    .bars
+                    .iter()
+                    .find(|b| b.hwnd == hwnd)
+                    .map(|b| b.monitor_index)
+                    .unwrap_or(0);
+                let (auto_dock, mut offset) = state.settings.get_pos(mon_idx);
+                if auto_dock {
+                    if let Some(m) = state.monitors.iter().find(|m| m.index == mon_idx) {
+                        offset = default_offset_for_taskbar(m);
                     }
-                    state.settings.auto_dock = false;
                 }
-                state.settings.offset_from_right += 20;
+                state.settings.set_pos(mon_idx, false, offset + 20);
             }
             CMD_MOVE_RIGHT => {
-                if state.settings.auto_dock {
-                    if let Some(m) = state.monitors.first() {
-                        state.settings.offset_from_right = default_offset_for_taskbar(m);
+                let mon_idx = state
+                    .bars
+                    .iter()
+                    .find(|b| b.hwnd == hwnd)
+                    .map(|b| b.monitor_index)
+                    .unwrap_or(0);
+                let (auto_dock, mut offset) = state.settings.get_pos(mon_idx);
+                if auto_dock {
+                    if let Some(m) = state.monitors.iter().find(|m| m.index == mon_idx) {
+                        offset = default_offset_for_taskbar(m);
                     }
-                    state.settings.auto_dock = false;
                 }
-                state.settings.offset_from_right = (state.settings.offset_from_right - 20).max(8);
+                state.settings.set_pos(mon_idx, false, (offset - 20).max(8));
             }
             CMD_RESET_POS => {
-                state.settings.auto_dock = true;
+                let mon_idx = state
+                    .bars
+                    .iter()
+                    .find(|b| b.hwnd == hwnd)
+                    .map(|b| b.monitor_index)
+                    .unwrap_or(0);
+                let (_, offset) = state.settings.get_pos(mon_idx);
+                state.settings.set_pos(mon_idx, true, offset);
             }
             CMD_MON_ALL => {
                 state.settings.all_monitors = true;
@@ -929,20 +976,23 @@ unsafe extern "system" fn wnd_proc(
             GetCursorPos(&mut pt);
             APP.with(|cell| {
                 if let Some(state) = cell.borrow_mut().as_mut() {
-                    if state.settings.auto_dock {
-                        if let Some(bar) = state.bars.iter().find(|b| b.hwnd == hwnd) {
-                            if let Some(mon) =
-                                state.monitors.iter().find(|m| m.index == bar.monitor_index)
-                            {
-                                state.settings.offset_from_right = default_offset_for_taskbar(mon);
-                            }
+                    let mon_idx = state
+                        .bars
+                        .iter()
+                        .find(|b| b.hwnd == hwnd)
+                        .map(|b| b.monitor_index)
+                        .unwrap_or(0);
+                    let (auto_dock, mut offset) = state.settings.get_pos(mon_idx);
+                    if auto_dock {
+                        if let Some(mon) = state.monitors.iter().find(|m| m.index == mon_idx) {
+                            offset = default_offset_for_taskbar(mon);
                         }
-                        state.settings.auto_dock = false;
+                        state.settings.set_pos(mon_idx, false, offset);
                     }
                     state.dragging = true;
                     state.drag_hwnd = hwnd;
                     state.drag_start_x = pt.x;
-                    state.drag_start_offset = state.settings.offset_from_right;
+                    state.drag_start_offset = offset;
                 }
             });
             windows_sys::Win32::UI::Input::KeyboardAndMouse::SetCapture(hwnd);
@@ -954,8 +1004,15 @@ unsafe extern "system" fn wnd_proc(
             APP.with(|cell| {
                 if let Some(state) = cell.borrow_mut().as_mut() {
                     if state.dragging && state.drag_hwnd == hwnd {
+                        let mon_idx = state
+                            .bars
+                            .iter()
+                            .find(|b| b.hwnd == hwnd)
+                            .map(|b| b.monitor_index)
+                            .unwrap_or(0);
                         let dx = pt.x - state.drag_start_x;
-                        state.settings.offset_from_right = (state.drag_start_offset - dx).max(8);
+                        let new_offset = (state.drag_start_offset - dx).max(8);
+                        state.settings.set_pos(mon_idx, false, new_offset);
                         sync_bars_and_layout(state);
                     }
                 }
@@ -980,7 +1037,7 @@ unsafe extern "system" fn wnd_proc(
             0
         }
         WM_COMMAND => {
-            handle_command(wparam & 0xFFFF);
+            handle_command(hwnd, wparam & 0xFFFF);
             0
         }
         WM_DESTROY => 0,
