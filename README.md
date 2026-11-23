@@ -1,15 +1,16 @@
-# TraySysMonitor
+# TraySysMonitor (Rust)
 
-Lightweight Windows taskbar & system-tray monitor for **CPU**, **RAM**, and **GPU** usage.
+Lightweight Windows taskbar hardware monitor written in Rust (`windows-sys`), docked directly on the taskbar without any system tray icon.
 
 ## Features
-- Compact dark pill docked automatically on the Windows taskbar to the left of the clock (or draggable anywhere).
-- System tray icon with live mini-bars and detailed hover tooltip.
-- Right-click menu to toggle which metrics to monitor (**CPU**, **RAM**, **GPU**), show/hide the taskbar bar, re-dock left of the clock, or enable **Run at Windows Startup**.
-- Auto-hides when a fullscreen app or game is active.
-- Uses Win32 `GlobalMemoryStatusEx`, `PerformanceCounter`, and `nvml.dll` directly for minimal CPU overhead.
+- **No Tray Icon:** Attaches directly onto the Windows taskbar.
+- **CPU, RAM, GPU Monitoring:** Uses `GetSystemTimes`, `GlobalMemoryStatusEx`, and `nvml.dll` for minimal CPU overhead.
+- **Multi-Monitor Support:** Choose **All Monitors** or select specific monitors (`Monitor 1`, `Monitor 2`, ...).
+- **Adjustable Horizontal Position:** Drag left/right directly on the taskbar or nudge via the right-click menu (`Move Left` / `Move Right` / `Reset Position`) to avoid overlapping other taskbar widgets.
+- **Auto-Hide on Fullscreen:** Automatically hides on any monitor running a fullscreen app or game.
+- **Run at Windows Startup:** Toggleable from the right-click menu.
 
-## Build (Windows)
+## Build
 ```powershell
-C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe /target:winexe /optimize+ /out:TraySysMonitor.exe Program.cs
+cargo build --release
 ```
