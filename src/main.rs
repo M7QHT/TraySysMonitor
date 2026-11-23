@@ -29,15 +29,14 @@ use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORY
 use windows_sys::Win32::System::Threading::{CreateMutexW, GetSystemTimes};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow,
-    DispatchMessageW, FindWindowExW, FindWindowW, GW_HWNDPREV, GetCursorPos, GetDesktopWindow,
-    GetForegroundWindow, GetMessageW, GetShellWindow, GetWindow, GetWindowRect, HWND_TOPMOST,
-    IDC_SIZEALL, IsWindowVisible, LoadCursorW, MF_CHECKED, MF_POPUP, MF_SEPARATOR, MF_STRING,
-    MF_UNCHECKED, MSG, PostMessageW, PostQuitMessage, RegisterClassW, SWP_NOACTIVATE, SWP_NOMOVE,
-    SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOWNOACTIVATE, SetForegroundWindow, SetTimer,
-    SetWindowPos, ShowWindow, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RIGHTBUTTON, TrackPopupMenu,
-    TranslateMessage, WM_CAPTURECHANGED, WM_COMMAND, WM_DESTROY, WM_ERASEBKGND, WM_LBUTTONDOWN,
-    WM_LBUTTONUP, WM_MOUSEMOVE, WM_NULL, WM_PAINT, WM_RBUTTONUP, WM_TIMER, WNDCLASSW,
-    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    DispatchMessageW, FindWindowExW, FindWindowW, GWL_STYLE, GetCursorPos, GetMessageW,
+    GetWindowRect, HWND_TOP, IDC_SIZEALL, LoadCursorW, MF_CHECKED, MF_POPUP, MF_SEPARATOR,
+    MF_STRING, MF_UNCHECKED, MSG, PostMessageW, PostQuitMessage, RegisterClassW, SWP_NOACTIVATE,
+    SWP_SHOWWINDOW, SetForegroundWindow, SetParent, SetTimer, SetWindowLongPtrW, SetWindowPos,
+    TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage,
+    WM_CAPTURECHANGED, WM_COMMAND, WM_DESTROY, WM_ERASEBKGND, WM_LBUTTONDOWN, WM_LBUTTONUP,
+    WM_MOUSEMOVE, WM_NULL, WM_PAINT, WM_RBUTTONUP, WM_TIMER, WNDCLASSW, WS_CHILD, WS_CLIPSIBLINGS,
+    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_POPUP, WS_VISIBLE,
 };
 
 const BAR_HEIGHT: i32 = 30;
@@ -329,6 +328,7 @@ struct MonitorTarget {
 struct BarWindow {
     hwnd: HWND,
     monitor_index: usize,
+    taskbar_hwnd: HWND,
 }
 
 struct AppState {
@@ -463,30 +463,6 @@ fn default_offset_for_taskbar(mon: &MonitorTarget) -> i32 {
     }
 }
 
-fn is_monitor_fullscreen(mon: &MonitorTarget, bars: &[BarWindow]) -> bool {
-    unsafe {
-        let fg = GetForegroundWindow();
-        if fg.is_null() || fg == GetDesktopWindow() || fg == GetShellWindow() {
-            return false;
-        }
-        if fg == mon.taskbar_hwnd || bars.iter().any(|b| b.hwnd == fg) {
-            return false;
-        }
-        let fg_mon = MonitorFromWindow(fg, MONITOR_DEFAULTTONEAREST);
-        if fg_mon != mon.hmonitor {
-            return false;
-        }
-        let mut r: RECT = zeroed();
-        if GetWindowRect(fg, &mut r) == 0 {
-            return false;
-        }
-        r.left <= mon.mon_rect.left
-            && r.top <= mon.mon_rect.top
-            && r.right >= mon.mon_rect.right
-            && r.bottom >= mon.mon_rect.bottom
-    }
-}
-
 fn is_startup_enabled() -> bool {
     unsafe {
         let subkey = to_wide(r"Software\Microsoft\Windows\CurrentVersion\Run");
@@ -544,9 +520,14 @@ fn sync_bars_and_layout(state: &mut AppState) {
         .map(|m| m.index)
         .collect();
 
-    // Remove bars that are no longer desired
+    // Remove bars that are no longer desired or whose parent taskbar handle changed
     state.bars.retain(|b| {
-        if desired_indices.contains(&b.monitor_index) {
+        let valid = desired_indices.contains(&b.monitor_index)
+            && state
+                .monitors
+                .iter()
+                .any(|m| m.index == b.monitor_index && m.taskbar_hwnd == b.taskbar_hwnd);
+        if valid {
             true
         } else {
             unsafe {
@@ -556,46 +537,51 @@ fn sync_bars_and_layout(state: &mut AppState) {
         }
     });
 
-    // Create missing bars
+    // Create missing bars and embed them directly into each monitor's taskbar
     let cls_name = to_wide("TraySysMonitorBarClass");
     for &idx in &desired_indices {
         if !state.bars.iter().any(|b| b.monitor_index == idx) {
-            unsafe {
-                let hwnd = CreateWindowExW(
-                    WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
-                    cls_name.as_ptr(),
-                    null(),
-                    WS_POPUP,
-                    0,
-                    0,
-                    w,
-                    BAR_HEIGHT,
-                    null_mut(),
-                    null_mut(),
-                    null_mut(),
-                    null(),
-                );
-                if !hwnd.is_null() {
-                    let rgn = CreateRoundRectRgn(0, 0, w + 1, BAR_HEIGHT + 1, 14, 14);
-                    SetWindowRgn(hwnd, rgn, 1);
-                    state.bars.push(BarWindow {
-                        hwnd,
-                        monitor_index: idx,
-                    });
+            if let Some(mon) = state.monitors.iter().find(|m| m.index == idx) {
+                unsafe {
+                    let hwnd = CreateWindowExW(
+                        WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+                        cls_name.as_ptr(),
+                        null(),
+                        WS_POPUP,
+                        0,
+                        0,
+                        w,
+                        BAR_HEIGHT,
+                        null_mut(),
+                        null_mut(),
+                        null_mut(),
+                        null(),
+                    );
+                    if !hwnd.is_null() {
+                        SetWindowLongPtrW(
+                            hwnd,
+                            GWL_STYLE,
+                            (WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS) as isize,
+                        );
+                        SetParent(hwnd, mon.taskbar_hwnd);
+                        let rgn = CreateRoundRectRgn(0, 0, w + 1, BAR_HEIGHT + 1, 14, 14);
+                        SetWindowRgn(hwnd, rgn, 1);
+                        state.bars.push(BarWindow {
+                            hwnd,
+                            monitor_index: idx,
+                            taskbar_hwnd: mon.taskbar_hwnd,
+                        });
+                    }
                 }
             }
         }
     }
 
-    // Position & visibility for each bar
+    // Position each bar inside its parent taskbar (client coordinates)
     for bar in &state.bars {
         if let Some(mon) = state.monitors.iter().find(|m| m.index == bar.monitor_index) {
-            if is_monitor_fullscreen(mon, &state.bars) {
-                unsafe {
-                    ShowWindow(bar.hwnd, SW_HIDE);
-                }
-                continue;
-            }
+            let tb_w = mon.tb_rect.right - mon.tb_rect.left;
+            let tb_h = mon.tb_rect.bottom - mon.tb_rect.top;
 
             let (auto_dock, saved_offset) = state.settings.get_pos(bar.monitor_index);
             let offset = if auto_dock {
@@ -604,16 +590,16 @@ fn sync_bars_and_layout(state: &mut AppState) {
                 saved_offset
             };
 
-            let mut x = mon.tb_rect.right - w - offset;
-            let min_x = mon.tb_rect.left + 8;
-            let max_x = mon.tb_rect.right - w - 8;
+            let mut x = tb_w - w - offset;
+            let min_x = 8;
+            let max_x = (tb_w - w - 8).max(8);
             if x < min_x {
                 x = min_x;
             }
             if x > max_x {
                 x = max_x;
             }
-            let y = mon.tb_rect.top + ((mon.tb_rect.bottom - mon.tb_rect.top) - BAR_HEIGHT) / 2;
+            let y = (tb_h - BAR_HEIGHT) / 2;
 
             unsafe {
                 let mut cur: RECT = zeroed();
@@ -623,58 +609,22 @@ fn sync_bars_and_layout(state: &mut AppState) {
                     let rgn = CreateRoundRectRgn(0, 0, w + 1, BAR_HEIGHT + 1, 14, 14);
                     SetWindowRgn(bar.hwnd, rgn, 1);
                 }
-                if cur.left != x || cur.top != y || cur_w != w {
+                let target_screen_x = mon.tb_rect.left + x;
+                let target_screen_y = mon.tb_rect.top + y;
+                if cur.left != target_screen_x || cur.top != target_screen_y || cur_w != w {
                     SetWindowPos(
                         bar.hwnd,
-                        null_mut(),
+                        HWND_TOP,
                         x,
                         y,
                         w,
                         BAR_HEIGHT,
-                        SWP_NOZORDER | SWP_NOACTIVATE,
-                    );
-                }
-                let was_hidden = IsWindowVisible(bar.hwnd) == 0;
-                if was_hidden {
-                    ShowWindow(bar.hwnd, SW_SHOWNOACTIVATE);
-                }
-                if !is_popup_menu_open() && (was_hidden || is_taskbar_above(bar.hwnd, mon.taskbar_hwnd)) {
-                    SetWindowPos(
-                        bar.hwnd,
-                        HWND_TOPMOST,
-                        0,
-                        0,
-                        0,
-                        0,
-                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                        SWP_NOACTIVATE | SWP_SHOWWINDOW,
                     );
                 }
                 InvalidateRect(bar.hwnd, null(), 0);
             }
         }
-    }
-}
-
-fn is_popup_menu_open() -> bool {
-    unsafe {
-        let cls = to_wide("#32768");
-        let h = FindWindowW(cls.as_ptr(), null());
-        !h.is_null() && IsWindowVisible(h) != 0
-    }
-}
-
-fn is_taskbar_above(bar_hwnd: HWND, taskbar_hwnd: HWND) -> bool {
-    unsafe {
-        let mut cur = GetWindow(bar_hwnd, GW_HWNDPREV);
-        let mut steps = 0;
-        while !cur.is_null() && steps < 32 {
-            if cur == taskbar_hwnd {
-                return true;
-            }
-            cur = GetWindow(cur, GW_HWNDPREV);
-            steps += 1;
-        }
-        false
     }
 }
 
