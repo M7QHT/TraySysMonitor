@@ -30,9 +30,10 @@ use windows_sys::Win32::System::Threading::{CreateMutexW, GetSystemTimes};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow,
     DispatchMessageW, FindWindowExW, FindWindowW, GetCursorPos, GetDesktopWindow,
-    GetForegroundWindow, GetMessageW, GetShellWindow, GetWindowRect, HWND_TOPMOST, IDC_SIZEALL,
-    LoadCursorW, MF_CHECKED, MF_POPUP, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MSG, PostQuitMessage,
-    RegisterClassW, SWP_NOACTIVATE, SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNOACTIVATE,
+    GetForegroundWindow, GetMessageW, GetShellWindow, GetWindowRect, IDC_SIZEALL,
+    IsWindowVisible, LoadCursorW, MF_CHECKED, MF_POPUP, MF_SEPARATOR, MF_STRING, MF_UNCHECKED,
+    MSG, PostQuitMessage, RegisterClassW, SWP_NOACTIVATE, SWP_NOZORDER, SW_HIDE,
+    SW_SHOWNOACTIVATE,
     SetForegroundWindow, SetTimer, SetWindowPos, ShowWindow, TPM_BOTTOMALIGN, TPM_LEFTALIGN,
     TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage, WM_COMMAND, WM_DESTROY, WM_LBUTTONDOWN,
     WM_LBUTTONUP, WM_MOUSEMOVE, WM_PAINT, WM_RBUTTONUP, WM_TIMER, WNDCLASSW, WS_EX_NOACTIVATE,
@@ -622,16 +623,20 @@ fn sync_bars_and_layout(state: &mut AppState) {
                     let rgn = CreateRoundRectRgn(0, 0, w + 1, BAR_HEIGHT + 1, 14, 14);
                     SetWindowRgn(bar.hwnd, rgn, 1);
                 }
-                SetWindowPos(
-                    bar.hwnd,
-                    HWND_TOPMOST,
-                    x,
-                    y,
-                    w,
-                    BAR_HEIGHT,
-                    SWP_NOACTIVATE | SWP_SHOWWINDOW,
-                );
-                ShowWindow(bar.hwnd, SW_SHOWNOACTIVATE);
+                if cur.left != x || cur.top != y || cur_w != w {
+                    SetWindowPos(
+                        bar.hwnd,
+                        null_mut(),
+                        x,
+                        y,
+                        w,
+                        BAR_HEIGHT,
+                        SWP_NOZORDER | SWP_NOACTIVATE,
+                    );
+                }
+                if IsWindowVisible(bar.hwnd) == 0 {
+                    ShowWindow(bar.hwnd, SW_SHOWNOACTIVATE);
+                }
                 InvalidateRect(bar.hwnd, null(), 0);
             }
         }
