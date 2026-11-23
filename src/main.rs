@@ -15,7 +15,8 @@ use windows_sys::Win32::Graphics::Gdi::{
     BeginPaint, CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, CreateFontW, CreatePen, CreateRoundRectRgn,
     CreateSolidBrush, DEFAULT_CHARSET, DEFAULT_PITCH, DeleteObject, DrawTextW, EndPaint,
     EnumDisplayMonitors, FF_DONTCARE, FW_BOLD, FW_NORMAL, FillRect, GetMonitorInfoW, HBRUSH, HDC,
-    HFONT, HMONITOR, MONITORINFO, MONITOR_DEFAULTTONEAREST, MonitorFromWindow, OUT_DEFAULT_PRECIS,
+    HFONT, HMONITOR, InvalidateRect, MONITORINFO, MONITOR_DEFAULTTONEAREST, MonitorFromWindow,
+    OUT_DEFAULT_PRECIS,
     PAINTSTRUCT, PS_SOLID, RoundRect, SelectObject, SetBkMode, SetTextColor, SetWindowRgn,
     TRANSPARENT, DT_LEFT, DT_SINGLELINE, DT_VCENTER,
 };
@@ -31,7 +32,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, FindWindowExW, FindWindowW, GetCursorPos, GetDesktopWindow,
     GetForegroundWindow, GetMessageW, GetShellWindow, GetWindowRect, HWND_TOPMOST, IDC_SIZEALL,
     LoadCursorW, MF_CHECKED, MF_POPUP, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MSG, PostQuitMessage,
-    RegisterClassW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNOACTIVATE,
+    RegisterClassW, SWP_NOACTIVATE, SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNOACTIVATE,
     SetForegroundWindow, SetTimer, SetWindowPos, ShowWindow, TPM_BOTTOMALIGN, TPM_LEFTALIGN,
     TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage, WM_COMMAND, WM_DESTROY, WM_LBUTTONDOWN,
     WM_LBUTTONUP, WM_MOUSEMOVE, WM_PAINT, WM_RBUTTONUP, WM_TIMER, WNDCLASSW, WS_EX_NOACTIVATE,
